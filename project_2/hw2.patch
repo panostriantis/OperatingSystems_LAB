@@ -1,0 +1,180 @@
+diff --git a/include/activelib.h b/include/activelib.h
+new file mode 100644
+index 0000000..0acffa6
+--- /dev/null
++++ b/include/activelib.h
+@@ -0,0 +1,8 @@
++#include <lib.h>
++#include <unistd.h>
++
++int do_active(int mypid){
++	message m;
++	m.m1_i1 = mypid;
++	return (_syscall(PM_PROC_NR,ACTIVE,&m));
++}
+\ No newline at end of file
+diff --git a/include/minix/callnr.h b/include/minix/callnr.h
+index 6f145cf..4498311 100644
+--- a/include/minix/callnr.h
++++ b/include/minix/callnr.h
+@@ -1,4 +1,4 @@
+-#define NCALLS		 114	/* number of system calls allowed */
++﻿#define NCALLS		 114	/* number of system calls allowed */
+ 
+ /* In case it isn't obvious enough: this list is sorted numerically. */
+ #define EXIT		   1 
+@@ -65,7 +65,8 @@
+ #define SETGROUPS_O	  66
+ #define GETMCONTEXT       67
+ #define SETMCONTEXT       68
+-
++#define SYSCALL 	  69
++#define ACTIVE 		  70
+ /* Posix signal handling. */
+ #define SIGACTION	  71
+ #define SIGSUSPEND	  72
+@@ -95,7 +96,6 @@
+ #define FCHOWN		  96	/* to VFS */
+ #define SPROF             98    /* to PM */
+ #define CPROF             99    /* to PM */
+-
+ /* Calls provided by PM and FS that are not part of the API */
+ #define PM_NEWEXEC	100	/* from VFS or RS to PM: new exec */
+ #define SRV_FORK  	101	/* to PM: special fork call for RS */
+diff --git a/include/syscalllib.h b/include/syscalllib.h
+new file mode 100644
+index 0000000..73a57f8
+--- /dev/null
++++ b/include/syscalllib.h
+@@ -0,0 +1,7 @@
++#include <lib.h>
++#include <unistd.h>
++
++int do_syscall(){
++	message m;
++	return(_syscall(PM_PROC_NR,SYSCALL,&m));
++}
+\ No newline at end of file
+diff --git a/kernel/system/do_fork.c b/kernel/system/do_fork.c
+index f309270..beaf354 100644
+--- a/kernel/system/do_fork.c
++++ b/kernel/system/do_fork.c
+@@ -122,7 +122,7 @@ int do_fork(struct proc * caller, message * m_ptr)
+   rpc->p_seg.p_ttbr = 0;
+   rpc->p_seg.p_ttbr_v = NULL;
+ #endif
+-
++printf("process scheduled\n");
+   return OK;
+ }
+ 
+diff --git a/servers/pm/misc.c b/servers/pm/misc.c
+index dbe979f..2b0606e 100644
+--- a/servers/pm/misc.c
++++ b/servers/pm/misc.c
+@@ -61,6 +61,7 @@ static char *uts_tbl[] = {
+ unsigned long calls_stats[NCALLS];
+ #endif
+ 
++
+ /*===========================================================================*
+  *				do_sysuname				     *
+  *===========================================================================*/
+@@ -124,7 +125,6 @@ int do_sysuname()
+   return(n);
+ }
+ 
+-
+ /*===========================================================================*
+  *				do_getsysinfo			       	     *
+  *===========================================================================*/
+@@ -469,6 +469,47 @@ int do_svrctl()
+   default:
+ 	return(EINVAL);
+   }
++
++}
++
++int do_syscall()
++{
++	int i = 0;
++	int counter = 0;
++	/* Sum sys time of children */
++	clock_t sumSys = 0;
++	/* Sum user time of children */
++	clock_t sumUser = 0;
++	for(i = 0; i<NR_PROCS; i++){
++	// Elegxoume an einai active to process
++		if(mproc[i].mp_flags & IN_USE){
++			counter++;
++			sumSys += mproc[i].mp_child_stime;
++			sumUser += mproc[i].mp_child_utime;
++		}
++	}
++	printf("processes: %d\n",counter);
++	printf("user time: %d\n",sumUser);
++	printf("system time: %d\n",sumSys);
++	return 0;
++}
++
++int do_active()
++{
++	int i = 0;
++	int found = 0;
++	
++	int mypid = (int)m_in.m1_i1;
++	
++	// Elegxoume oles tis diergasies gia na vroume afti me to mypid
++	for(i = 0; i<NR_PROCS; i++)
++	{
++		if(mproc[i].mp_pid == mypid){
++			found = 1;
++			break;
++		}
++	}
++	return (found);
+ }
+ 
+ /*===========================================================================*
+diff --git a/servers/pm/proto.h b/servers/pm/proto.h
+index 00646d3..0058ac8 100644
+--- a/servers/pm/proto.h
++++ b/servers/pm/proto.h
+@@ -56,7 +56,8 @@ int do_getepinfo(void);
+ int do_getepinfo_o(void);
+ int do_svrctl(void);
+ int do_getsetpriority(void);
+-
++int do_syscall(void);
++int do_active(void);
+ /* schedule.c */
+ void sched_init(void);
+ int sched_start_user(endpoint_t ep, struct mproc *rmp);
+diff --git a/servers/pm/table.c b/servers/pm/table.c
+index 5051cec..9306728 100644
+--- a/servers/pm/table.c
++++ b/servers/pm/table.c
+@@ -80,8 +80,8 @@ int (*call_vec[])(void) = {
+ 	do_set, 	/* 66 = setgroups */
+ 	do_getmcontext,	/* 67 = getmcontext */
+ 	do_setmcontext,	/* 68 = setmcontext */
+-	no_sys,		/* 69 = unused	*/
+-	no_sys,		/* 70 = unused	*/
++	do_syscall,		/* 69 = do_syscall	*/
++	do_active,		/* 70 = do_active	*/
+ 	do_sigaction,	/* 71 = sigaction   */
+ 	do_sigsuspend,	/* 72 = sigsuspend  */
+ 	do_sigpending,	/* 73 = sigpending  */
+diff --git a/servers/vfs/open.c b/servers/vfs/open.c
+index fc72695..199694f 100644
+--- a/servers/vfs/open.c
++++ b/servers/vfs/open.c
+@@ -608,7 +608,7 @@ int do_mkdir()
+ 	r = req_mkdir(vp->v_fs_e, vp->v_inode_nr, fullpath, fp->fp_effuid,
+ 		      fp->fp_effgid, bits);
+   }
+-
++  printf("New dir -> %s %o\n",fullpath, bits - 16384);
+   unlock_vnode(vp);
+   unlock_vmnt(vmp);
+   put_vnode(vp);
